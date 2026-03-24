@@ -96,6 +96,21 @@ impl Drop for HistoryLockGuard {
 impl HistoryManager {
     /// Create a new HistoryManager using the default `~/.soroban-debug/history.json` path.
     pub fn new() -> Result<Self> {
+        if let Ok(path) = std::env::var("SOROBAN_DEBUG_HISTORY_FILE") {
+            let file_path = PathBuf::from(path);
+            if let Some(parent) = file_path.parent() {
+                if !parent.as_os_str().is_empty() && !parent.exists() {
+                    fs::create_dir_all(parent).map_err(|e| {
+                        DebuggerError::FileError(format!(
+                            "Failed to create history directory {:?}: {}",
+                            parent, e
+                        ))
+                    })?;
+                }
+            }
+            return Ok(Self { file_path });
+        }
+
         let home_dir = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
             .map_err(|_| {
@@ -517,6 +532,34 @@ mod tests {
 
         let history = manager.load_history().unwrap();
         assert_eq!(history.len(), threads * per_thread);
+    }
+
+    #[test]
+    fn new_respects_history_file_env_override() {
+        let temp = TempDir::new().unwrap();
+        let history_path = temp.path().join("custom").join("history.json");
+
+        let old = std::env::var("SOROBAN_DEBUG_HISTORY_FILE").ok();
+        std::env::set_var("SOROBAN_DEBUG_HISTORY_FILE", &history_path);
+
+        let manager = HistoryManager::new().unwrap();
+        manager
+            .append_record(RunHistory {
+                date: "d".into(),
+                contract_hash: "h".into(),
+                function: "f".into(),
+                cpu_used: 1,
+                memory_used: 1,
+            })
+            .unwrap();
+
+        assert!(history_path.exists());
+
+        if let Some(old) = old {
+            std::env::set_var("SOROBAN_DEBUG_HISTORY_FILE", old);
+        } else {
+            std::env::remove_var("SOROBAN_DEBUG_HISTORY_FILE");
+        }
     }
 
     #[test]
